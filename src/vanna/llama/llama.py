@@ -111,12 +111,28 @@ class Llama(VannaBase):
             return llm_response
 
     def submit_prompt(self, prompt, **kwargs) -> str:
+        if self.mode == 'local':
+            self.log(
+                f"LlamaCpp parameters:\n"
+                f"model_path={self.model_path},\n"
+                f"n_ctx={self.n_ctx},\n"
+                f"temperature={self.temperature},\n"
+                f"max_tokens={self.max_tokens}"
+            )
+        else:
+            self.log(
+                f"LlamaCpp Server parameters:\n"
+                f"server_url={self.server_url},\n"
+                f"temperature={self.temperature},\n"
+                f"max_tokens={self.max_tokens}"
+            )
+        
         self.log(f"Prompt Content:\n{json.dumps(prompt, ensure_ascii=False)}")
 
         if self.mode == 'server':
             return self._submit_to_server(prompt)
         
-        # Local mode (existing code)
+        # Local mode
         formatted_prompt = self._format_messages(prompt)
         response = self.llm(
             formatted_prompt,
@@ -146,6 +162,9 @@ class Llama(VannaBase):
             json=payload,
             timeout=120
         )
+        
+        if response.status_code != 200:
+            raise Exception(f"Server error: {response.status_code} - {response.text}")
         
         result = response.json()
         return result['content']
