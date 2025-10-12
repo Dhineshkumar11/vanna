@@ -60,11 +60,11 @@ class Llama(VannaBase):
     def _init_server_connection(self, config):
         """Initialize connection to llama.cpp server"""
         self.server_url = config.get('server_url', 'http://localhost:8080')
-        self.api_key = config.get('api_key', None)  # Optional API key
+        self.api_key = config.get('api_key', None)
         
-        # Test connection
+        # Test connection - try /v1/models or root endpoint
         try:
-            response = requests.get(f"{self.server_url}/health", timeout=5)
+            response = requests.get(f"{self.server_url}/v1/models", timeout=5)
             if response.status_code == 200:
                 self.log(f"Connected to llama.cpp server at {self.server_url}")
             else:
@@ -111,31 +111,44 @@ class Llama(VannaBase):
             return llm_response
 
     def submit_prompt(self, prompt, **kwargs) -> str:
-        self.log(
-            f"LlamaCpp parameters:\n"
-            f"model_path={self.model_path},\n"
-            f"n_ctx={self.n_ctx},\n"
-            f"temperature={self.temperature},\n"
-            f"max_tokens={self.max_tokens}"
-        )
         self.log(f"Prompt Content:\n{json.dumps(prompt, ensure_ascii=False)}")
 
-        # Format messages into a single prompt string
-        formatted_prompt = self._format_messages(prompt)
+        if self.mode == 'server':
+            return self._submit_to_server(prompt)
         
-        # Generate response
+        # Local mode (existing code)
+        formatted_prompt = self._format_messages(prompt)
         response = self.llm(
             formatted_prompt,
             max_tokens=self.max_tokens,
             temperature=self.temperature,
-            stop=["</s>", "\n\n\n"],  # Common stop sequences
+            stop=["</s>", "\n\n\n"],
             echo=False
         )
         
         response_text = response['choices'][0]['text']
         self.log(f"LlamaCpp Response:\n{response_text}")
-        
         return response_text
+
+    def _submit_to_server(self, prompt) -> str:
+        """Submit to llama.cpp server"""
+        formatted_prompt = self._format_messages(prompt)
+        
+        payload = {
+            'prompt': formatted_prompt,
+            'temperature': self.temperature,
+            'max_tokens': self.max_tokens,
+            'stop': ["</s>", "\n\n\n"]
+        }
+        
+        response = requests.post(
+            f"{self.server_url}/completion",
+            json=payload,
+            timeout=120
+        )
+        
+        result = response.json()
+        return result['content']
 
     def _format_messages(self, messages) -> str:
         """
