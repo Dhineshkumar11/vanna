@@ -1,6 +1,7 @@
 import json
 import re
 from typing import Optional, Dict, Any
+import requests
 
 from ..base import VannaBase
 from ..exceptions import DependencyError
@@ -8,6 +9,25 @@ from ..exceptions import DependencyError
 
 class Llama(VannaBase):
     def __init__(self, config=None):
+        if not config:
+            raise ValueError("config must be provided")
+        
+        self.mode = config.get('mode', 'local')  # 'local' or 'server'
+        self.temperature = config.get("temperature", 0.7)
+        self.max_tokens = config.get("max_tokens", 512)
+        self.top_p = config.get("top_p", 0.95)
+        self.top_k = config.get("top_k", 40)
+        self.repeat_penalty = config.get("repeat_penalty", 1.1)
+        
+        if self.mode == 'local':
+            self._init_local_model(config)
+        elif self.mode == 'server':
+            self._init_server_connection(config)
+        else:
+            raise ValueError("mode must be either 'local' or 'server'")
+    
+    def _init_local_model(self, config):
+        """Initialize local llama.cpp model"""
         try:
             from llama_cpp import Llama
         except ImportError:
@@ -15,28 +35,44 @@ class Llama(VannaBase):
                 "You need to install required dependencies to execute this method, run command:"
                 " \npip install llama-cpp-python"
             )
-
-        if not config:
-            raise ValueError("config must contain at least model_path")
+        
         if 'model_path' not in config:
-            raise ValueError("config must contain model_path")
-
-        # Model configuration
+            raise ValueError("config must contain model_path for local mode")
+        
         self.model_path = config["model_path"]
         self.n_ctx = config.get("n_ctx", 2048)
-        self.n_threads = config.get("n_threads", 4)
-        self.n_gpu_layers = config.get("n_gpu_layers", 0)
-        self.temperature = config.get("temperature", 0.7)
-        self.max_tokens = config.get("max_tokens", 512)
+        self.n_threads = config.get("n_threads", 8)  # Mac Studio has many cores
+        self.n_gpu_layers = config.get("n_gpu_layers", 1)  # Metal acceleration
         
-        # Initialize Llama model
+        # Initialize local model
         self.llm = Llama(
             model_path=self.model_path,
             n_ctx=self.n_ctx,
             n_threads=self.n_threads,
             n_gpu_layers=self.n_gpu_layers,
-            verbose=config.get("verbose", False)
+            verbose=config.get("verbose", False),
+            use_mmap=True,  # Memory mapping for efficiency
+            use_mlock=config.get("use_mlock", False)  # Lock model in RAM if needed
         )
+        
+        self.log(f"Initialized local model: {self.model_path}")
+    
+    def _init_server_connection(self, config):
+        """Initialize connection to llama.cpp server"""
+        self.server_url = config.get('server_url', 'http://localhost:8080')
+        self.api_key = config.get('api_key', None)  # Optional API key
+        
+        # Test connection
+        try:
+            response = requests.get(f"{self.server_url}/health", timeout=5)
+            if response.status_code == 200:
+                self.log(f"Connected to llama.cpp server at {self.server_url}")
+            else:
+                raise ConnectionError(f"Server returned status {response.status_code}")
+        except requests.exceptions.RequestException as e:
+            raise ConnectionError(f"Failed to connect to llama.cpp server: {e}")
+        
+        self.llm = None  # No local model in server mode
 
     def system_message(self, message: str) -> dict:
         return {"role": "system", "content": message}
